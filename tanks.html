@@ -35,72 +35,103 @@
   </style>
 </head>
 <body>
-  <canvas id="game" width="600" height="600"></canvas>
+  <canvas id="game" width="1000" height="800"></canvas>
   <button id="backBtn" onclick="location.href='index.html'">Back to Menu</button>
 
   <script>
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
 
-    // Tank/player
+    // --- Player ---
     const tank = {
-      x: 100,
-      y: 100,
+      x: 100, y: 100,
       size: 30,
       angle: 0,
       speed: 2.5,
-      rotationSpeed: 0.05
+      rotationSpeed: 0.05,
+      alive: true
     };
 
     const keys = {};
     document.addEventListener("keydown", e => keys[e.key] = true);
     document.addEventListener("keyup", e => keys[e.key] = false);
 
-    // Bullets
+    // --- Bullets ---
     let bullets = [];
     const bulletSpeed = 5;
     const maxBounces = 3;
 
-    // Walls (simple rectangles)
+    // --- Mines ---
+    let mines = [];
+    function placeMine() {
+      mines.push({x: tank.x, y: tank.y, size: 15});
+    }
+
+    // --- Walls (bigger map layout) ---
     const walls = [
-      {x: 200, y: 150, w: 200, h: 20},
-      {x: 100, y: 300, w: 20, h: 200},
-      {x: 400, y: 350, w: 150, h: 20},
-      {x: 250, y: 450, w: 100, h: 20},
+      {x: 200, y: 150, w: 300, h: 20},
+      {x: 500, y: 300, w: 20, h: 200},
+      {x: 700, y: 100, w: 20, h: 250},
+      {x: 300, y: 500, w: 300, h: 20},
+      {x: 150, y: 650, w: 400, h: 20},
+      {x: 600, y: 600, w: 300, h: 20}
     ];
 
-    function shoot() {
-      const dx = Math.cos(tank.angle);
-      const dy = Math.sin(tank.angle);
+    // --- Enemies ---
+    let enemies = [];
+    let spawnTimer = 0;
+    const spawnInterval = 300; // frames (~5 seconds at 60fps)
+    const maxEnemies = 6;
+
+    function spawnEnemy() {
+      const spawnPoints = [
+        {x: 900, y: 700},
+        {x: 900, y: 100},
+        {x: 100, y: 700}
+      ];
+      let p = spawnPoints[Math.floor(Math.random()*spawnPoints.length)];
+      enemies.push({
+        x: p.x, y: p.y,
+        size: 30, angle: Math.PI,
+        speed: 1.5, rotationSpeed: 0.03,
+        alive: true, shootCooldown: 0
+      });
+    }
+
+    // --- Shoot ---
+    function shoot(t) {
+      const dx = Math.cos(t.angle);
+      const dy = Math.sin(t.angle);
       bullets.push({
-        x: tank.x + dx * tank.size/2,
-        y: tank.y + dy * tank.size/2,
+        x: t.x + dx * t.size/2,
+        y: t.y + dy * t.size/2,
         dx: dx * bulletSpeed,
         dy: dy * bulletSpeed,
-        bounces: 0
+        bounces: 0,
+        owner: t
       });
     }
 
     document.addEventListener("keydown", e => {
-      if (e.code === "Space") shoot();
+      if (e.code === "Space" && tank.alive) shoot(tank);
+      if (e.key === "m" && tank.alive) placeMine();
     });
 
-    function drawTank() {
+    // --- Draw ---
+    function drawTank(t, color="green") {
       ctx.save();
-      ctx.translate(tank.x, tank.y);
-      ctx.rotate(tank.angle);
-      ctx.fillStyle = "green";
-      ctx.fillRect(-tank.size/2, -tank.size/2, tank.size, tank.size);
+      ctx.translate(t.x, t.y);
+      ctx.rotate(t.angle);
+      ctx.fillStyle = color;
+      ctx.fillRect(-t.size/2, -t.size/2, t.size, t.size);
       ctx.fillStyle = "black";
-      ctx.fillRect(0, -5, tank.size/2, 10); // barrel
+      ctx.fillRect(0, -5, t.size/2, 10);
       ctx.restore();
     }
 
     function drawWalls() {
       ctx.fillStyle = "#888";
-      for (let w of walls) {
-        ctx.fillRect(w.x, w.y, w.w, w.h);
-      }
+      for (let w of walls) ctx.fillRect(w.x, w.y, w.w, w.h);
     }
 
     function drawBullets() {
@@ -112,7 +143,30 @@
       }
     }
 
+    function drawMines() {
+      ctx.fillStyle = "red";
+      for (let m of mines) {
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, m.size/2, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // --- Collisions ---
+    function collides(x, y, size) {
+      const half = size/2;
+      if (x - half < 0 || x + half > canvas.width || y - half < 0 || y + half > canvas.height) {
+        return true;
+      }
+      return walls.some(w =>
+        x+half > w.x && x-half < w.x+w.w &&
+        y+half > w.y && y-half < w.y+w.h
+      );
+    }
+
+    // --- Updates ---
     function updateTank() {
+      if (!tank.alive) return;
       if (keys["ArrowLeft"] || keys["a"]) tank.angle -= tank.rotationSpeed;
       if (keys["ArrowRight"] || keys["d"]) tank.angle += tank.rotationSpeed;
 
@@ -126,17 +180,40 @@
         moveY = -Math.sin(tank.angle) * tank.speed;
       }
 
-      // Check wall collisions before moving
-      let newX = tank.x + moveX;
-      let newY = tank.y + moveY;
-      const half = tank.size/2;
+      let newX = tank.x + moveX, newY = tank.y + moveY;
+      if (!collides(newX, newY, tank.size)) {
+        tank.x = newX; tank.y = newY;
+      }
+    }
 
-      if (!walls.some(w => 
-        newX + half > w.x && newX - half < w.x + w.w &&
-        newY + half > w.y && newY - half < w.y + w.h
-      )) {
-        tank.x = newX;
-        tank.y = newY;
+    function updateEnemies() {
+      for (let e of enemies) {
+        if (!e.alive) continue;
+
+        let dx = tank.x - e.x, dy = tank.y - e.y;
+        let desiredAngle = Math.atan2(dy, dx);
+        let angleDiff = ((desiredAngle - e.angle + Math.PI*3) % (Math.PI*2)) - Math.PI;
+        if (angleDiff > 0) e.angle += e.rotationSpeed;
+        else e.angle -= e.rotationSpeed;
+
+        let moveX = Math.cos(e.angle) * e.speed * 0.5;
+        let moveY = Math.sin(e.angle) * e.speed * 0.5;
+        let newX = e.x + moveX, newY = e.y + moveY;
+        if (!collides(newX, newY, e.size)) {
+          e.x = newX; e.y = newY;
+        }
+
+        if (e.shootCooldown <= 0) {
+          shoot(e);
+          e.shootCooldown = 150;
+        } else e.shootCooldown--;
+      }
+
+      // spawn new enemies
+      spawnTimer++;
+      if (spawnTimer >= spawnInterval && enemies.length < maxEnemies) {
+        spawnEnemy();
+        spawnTimer = 0;
       }
     }
 
@@ -145,37 +222,70 @@
         b.x += b.dx;
         b.y += b.dy;
 
-        // Bounce on canvas edges
-        if (b.x < 0 || b.x > canvas.width) {
-          b.dx *= -1;
-          b.bounces++;
-        }
-        if (b.y < 0 || b.y > canvas.height) {
-          b.dy *= -1;
-          b.bounces++;
-        }
+        if (b.x < 0 || b.x > canvas.width) { b.dx *= -1; b.bounces++; }
+        if (b.y < 0 || b.y > canvas.height) { b.dy *= -1; b.bounces++; }
 
-        // Bounce on walls
         for (let w of walls) {
           if (b.x > w.x && b.x < w.x+w.w && b.y > w.y && b.y < w.y+w.h) {
-            // Determine bounce direction
             if (b.x - b.dx < w.x || b.x - b.dx > w.x + w.w) b.dx *= -1;
             if (b.y - b.dy < w.y || b.y - b.dy > w.y + w.h) b.dy *= -1;
             b.bounces++;
           }
         }
       }
-      // Remove bullets after too many bounces
       bullets = bullets.filter(b => b.bounces <= maxBounces);
+
+      for (let b of bullets) {
+        if (tank.alive &&
+          b.owner !== tank &&
+          Math.abs(b.x - tank.x) < tank.size/2 &&
+          Math.abs(b.y - tank.y) < tank.size/2) {
+          tank.alive = false;
+          alert("You were destroyed!");
+          location.reload();
+        }
+      }
+
+      for (let e of enemies) {
+        if (!e.alive) continue;
+        for (let b of bullets) {
+          if (b.owner === tank &&
+            Math.abs(b.x - e.x) < e.size/2 &&
+            Math.abs(b.y - e.y) < e.size/2) {
+            e.alive = false;
+          }
+        }
+      }
     }
 
+    function updateMines() {
+      for (let m of mines) {
+        if (tank.alive &&
+          Math.abs(m.x - tank.x) < tank.size/2 &&
+          Math.abs(m.y - tank.y) < tank.size/2) {
+          tank.alive = false;
+          alert("You hit a mine!");
+          location.reload();
+        }
+
+        for (let e of enemies) {
+          if (e.alive &&
+            Math.abs(m.x - e.x) < e.size/2 &&
+            Math.abs(m.y - e.y) < e.size/2) {
+            e.alive = false;
+          }
+        }
+      }
+    }
+
+    // --- Main Loop ---
     function gameLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawWalls();
-      updateTank();
-      drawTank();
-      updateBullets();
-      drawBullets();
+      updateTank(); if (tank.alive) drawTank(tank, "green");
+      updateEnemies(); enemies.forEach(e => { if (e.alive) drawTank(e, "red"); });
+      updateBullets(); drawBullets();
+      updateMines(); drawMines();
       requestAnimationFrame(gameLoop);
     }
     gameLoop();
