@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>First-Person Forest (Demo)</title>
+<style>
+  html,body { height:100%; margin:0; background:#081218; color:#dfeffb; font-family:system-ui,Segoe UI,Roboto,Arial; }
+  #wrap { display:flex; flex-direction:column; height:100%; align-items:center; justify-content:center; }
+  canvas { width:100%; height:100%; display:block; cursor:crosshair; background:linear-gradient(#4b7,#1b3); }
+  #hud {
+    position:fixed; left:12px; top:12px;
+    background:rgba(2,6,10,0.45); padding:8px 10px; border-radius:8px; backdrop-filter: blur(4px);
+    font-size:14px;
+  }
+  #instructions {
+    position:fixed; right:12px; top:12px; background:rgba(2,6,10,0.45); padding:8px 10px; border-radius:8px;
+  }
+  /* touch controls for mobile */
+  .touch-controls { position:fixed; left:12px; bottom:12px; display:flex; gap:8px; }
+  .touch-button { width:56px; height:56px; background:rgba(0,0,0,0.35); border-radius:12px; display:flex;
+                  align-items:center; justify-content:center; font-weight:700; font-size:18px; color:#fff; user-select:none; }
+  .jump-btn { position:fixed; right:12px; bottom:12px; width:72px; height:72px; border-radius:18px; background:#3ea; color:#042; font-weight:800; }
+  @media(min-width:700px) { .touch-controls, .jump-btn { display:none; } }
+</style>
+</head>
+<body>
+<div id="hud">WASD or arrow keys — Space to jump — Click canvas to lock mouse</div>
+<div id="instructions">FPS Forest Demo</div>
+<canvas id="gl"></canvas>
+
+<!-- Mobile touch controls -->
+<div class="touch-controls" id="touchControls">
+  <div class="touch-button" id="btnForward">↑</div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    <div class="touch-button" id="btnLeft">◀</div>
+    <div class="touch-button" id="btnBack">↓</div>
+    <div class="touch-button" id="btnRight">▶</div>
+  </div>
+</div>
+<div class="jump-btn" id="btnJump">JUMP</div>
+
+<script>
+// ==== First-person forest demo (single file, WebGL) ====
+// - Small custom matrix helpers (no external libs)
+// - Ground plane + many billboard "trees" that face the camera
+// - Pointer lock + WASD movement + jumping gravity + simple collision with ground
+// - Mobile touch buttons (basic) included
+
+// ---- Minimal linear algebra helpers ----
+function Mat4() {
+  return new Float32Array(16);
+}
+function identity(out){
+  out[0]=1; out[1]=0; out[2]=0; out[3]=0;
+  out[4]=0; out[5]=1; out[6]=0; out[7]=0;
+  out[8]=0; out[9]=0; out[10]=1; out[11]=0;
+  out[12]=0; out[13]=0; out[14]=0; out[15]=1;
+  return out;
+}
+function multiply(out, a, b){
+  // out = a * b
+  const A=a, B=b;
+  const o = out;
+  for(let i=0;i<4;i++){
+    for(let j=0;j<4;j++){
+      o[i*4+j] = A[i*4+0]*B[0*4+j] + A[i*4+1]*B[1*4+j] + A[i*4+2]*B[2*4+j] + A[i*4+3]*B[3*4+j];
+    }
+  }
+  return out;
+}
+function translate(out, a, v){
+  const x=v[0], y=v[1], z=v[2];
+  identity(out);
+  out[12] = a[0]*1 + a[4]*0 + a[8]*0 + x;
+  // simpler approach: create translation matrix and multiply
+  out[12] = a[12] + x; out[13] = a[13] + y; out[14] = a[14] + z;
+  return out;
+}
+function perspective(out, fovy, aspect, near, far){
+  const f = 1.0/Math.tan(fovy/2), nf = 1/(near - far);
+  out[0]=f/aspect; out[1]=0; out[2]=0; out[3]=0;
+  out[4]=0; out[5]=f; out[6]=0; out[7]=0;
+  out[8]=0; out[9]=0; out[10]=(far+near)*nf; out[11]=-1;
+  out[12]=0; out[13]=0; out[14]=(2*far*near)*nf; out[15]=0;
+  return out;
+}
+function lookAt(out, eye, center, up){
+  const [ex,ey,ez]=eye, [cx,cy,cz]=center, [ux,uy,uz]=up;
+  let zx = ex-cx, zy = ey-cy, zz = ez-cz;
+  let len = Math.hypot(zx,zy,zz); if(len===0){ zx=0; zy=0; zz=1; } else { zx/=len; zy/=len; zz/=len; }
+  let xx = uy*zz - uz*zy, xy = uz*zx - ux*zz, xz = ux*zy - uy*zx;
+  len = Math.hypot(xx,xy,xz); if(len===0){ xx=1; xy=0; xz=0; } else { xx/=len; xy/=len; xz/=len; }
+  let yx = zy*xz - zz*xy, yy = zz*xx - zx*xz, yz = zx*xy - zy*xx;
+  len = Math.hypot(yx,yy,yz); if(len===0){ yx=0; yy=1; yz=0; } else { yx/=len; yy/=len; yz/=len; }
+  out[0]=xx; out[1]=yx; out[2]=zx; out[3]=0;
+  out[4]=xy; out[5]=yy; out[6]=zy; out[7]=0;
+  out[8]=xz; out[9]=yz; out[10]=zz; out[11]=0;
+  out[12]=-(xx*ex + xy*ey + xz*ez);
+  out[13]=-(yx*ex + yy*ey + yz*ez);
+  out[14]=-(zx*ex + zy*ey + zz*ez);
+  out[15]=1;
+  return out;
+}
+
+// ---- WebGL setup ----
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl', { antialias:true });
+if(!gl){ alert('WebGL not supported'); throw new Error('WebGL not supported'); }
+function resizeCanvasToDisplaySize(canvas){
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.floor(canvas.clientWidth * dpr);
+  const h = Math.floor(canvas.clientHeight * dpr);
+  if(canvas.width !== w || canvas.height !== h){ canvas.width = w; canvas.height = h; gl.viewport(0,0,w,h); }
+}
+window.addEventListener('resize', ()=>resizeCanvasToDisplaySize(canvas));
+resizeCanvasToDisplaySize(canvas);
+
+// ---- simple shaders for colored billboard quads & ground ----
+const vs = `
+attribute vec3 a_pos;
+attribute vec2 a_uv;
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform vec3 u_billPos; // center of billboard in world
+uniform vec2 u_billSize;
+varying vec2 v_uv;
+void main(){
+  // a_pos.xy is local quad coord in [-0.5,0.5] for billboard in X/Y
+  // We'll compute world-space position by facing the camera (billboard)
+  vec4 pos = vec4(a_pos, 1.0);
+  // Expand in camera space using view matrix (extract right & up vectors)
+  vec3 right = vec3(u_view[0][0], u_view[1][0], u_view[2][0]); // first column
+  vec3 up = vec3(u_view[0][1], u_view[1][1], u_view[2][1]); // second column
+  vec3 world = u_billPos + right * (a_pos.x * u_billSize.x) + up * (a_pos.y * u_billSize.y);
+  gl_Position = u_proj * u_view * vec4(world, 1.0);
+  v_uv = a_uv;
+}
+`;
+
+// simple fragment shader: green leaves with alpha and trunk darker
+const fs = `
+precision mediump float;
+varying vec2 v_uv;
+uniform vec3 u_color;
+void main(){
+  // radial fade for nicer silhouette
+  float d = length(v_uv - 0.5);
+  float alpha = smoothstep(0.6, 0.45, d);
+  gl_FragColor = vec4(u_color, alpha);
+}
+`;
+
+// shader compile helpers
+function compileShader(src, type){
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function makeProgram(vsSrc, fsSrc){
+  const vsS = compileShader(vsSrc, gl.VERTEX_SHADER);
+  const fsS = compileShader(fsSrc, gl.FRAGMENT_SHADER);
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vsS); gl.attachShader(prog, fsS);
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  return prog;
+}
+const program = makeProgram(vs, fs);
+
+// quad geometry (two triangles) centered at (0,0) with coords in [-0.5,0.5]
+const quadVerts = new Float32Array([
+  -0.5, -0.5, 0.0,  0,0,
+   0.5, -0.5, 0.0,  1,0,
+   0.5,  0.5, 0.0,  1,1,
+  -0.5, -0.5, 0.0,  0,0,
+   0.5,  0.5, 0.0,  1,1,
+  -0.5,  0.5, 0.0,  0,1
+]);
+const vaoBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vaoBuf); gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
+
+// get attrib/uniform locations
+const a_pos = gl.getAttribLocation(program, 'a_pos');
+const a_uv = gl.getAttribLocation(program, 'a_uv');
+const u_proj = gl.getUniformLocation(program, 'u_proj');
+const u_view = gl.getUniformLocation(program, 'u_view');
+const u_billPos = gl.getUniformLocation(program, 'u_billPos');
+const u_billSize = gl.getUniformLocation(program, 'u_billSize');
+const u_color = gl.getUniformLocation(program, 'u_color');
+
+// bind attributes function
+function setQuadAttribs(){
+  gl.bindBuffer(gl.ARRAY_BUFFER, vaoBuf);
+  gl.enableVertexAttribArray(a_pos);
+  gl.vertexAttribPointer(a_pos, 3, gl.FLOAT, false, 20, 0);
+  gl.enableVertexAttribArray(a_uv);
+  gl.vertexAttribPointer(a_uv, 2, gl.FLOAT, false, 20, 12);
+}
+
+// ---- Scene: ground + trees ----
+const world = {
+  width: 2000, depth: 2000 // large forest
+};
+const treeCount = 350;
+const trees = [];
+// generate random tree positions (avoid immediate area near origin)
+for(let i=0;i<treeCount;i++){
+  let x,y;
+  do{
+    x = (Math.random()-0.5)*world.width;
+    y = (Math.random()-0.5)*world.depth;
+  } while(Math.hypot(x, y) < 80); // keep spawn away from player start
+  // each tree: position and size
+  trees.push({x, z: y, height: 120 + Math.random()*80, width: 60 + Math.random()*40, color: [0.12 + Math.random()*0.15, 0.45 + Math.random()*0.2, 0.1 + Math.random()*0.08]});
+}
+
+// ground grid renderer (simple)
+function drawGround(ctx2d){
+  // We'll draw ground using WebGL as a big flat strip via the canvas clear color and an extra pass; but for simplicity we'll render the ground via 2D overlay
+}
+
+// ---- Camera / player state ----
+const player = {
+  x: 0, y: 14, z: 0,   // y is height above ground
+  yaw: 0, pitch: 0,
+  speed: 220,          // units per second (walk)
+  velY: 0,             // vertical velocity for jump
+  grounded: true
+};
+
+const GRAVITY = -900;   // units per second^2
+const JUMP_V = 420;     // jump impulse
+
+// input state
+const input = { forward:false, back:false, left:false, right:false, jump:false };
+window.addEventListener('keydown', (e)=>{
+  if(e.key === 'w' || e.key === 'ArrowUp') input.forward = true;
+  if(e.key === 's' || e.key === 'ArrowDown') input.back = true;
+  if(e.key === 'a' || e.key === 'ArrowLeft') input.left = true;
+  if(e.key === 'd' || e.key === 'ArrowRight') input.right = true;
+  if(e.code === 'Space') { if(player.grounded){ player.velY = JUMP_V; player.grounded=false; } }
+});
+window.addEventListener('keyup', (e)=>{
+  if(e.key === 'w' || e.key === 'ArrowUp') input.forward = false;
+  if(e.key === 's' || e.key === 'ArrowDown') input.back = false;
+  if(e.key === 'a' || e.key === 'ArrowLeft') input.left = false;
+  if(e.key === 'd' || e.key === 'ArrowRight') input.right = false;
+});
+
+// pointer lock for mouse look
+canvas.addEventListener('click', ()=> {
+  if(document.pointerLockElement !== canvas) canvas.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', ()=> {
+  const locked = document.pointerLockElement === canvas;
+  document.getElementById('hud').textContent = locked ? 'Mouse locked — move to look — WASD to move — Space to jump' : 'Click canvas to lock mouse';
+});
+document.addEventListener('mousemove', (e)=>{
+  if(document.pointerLockElement === canvas){
+    const sensitivity = 0.0022;
+    player.yaw -= e.movementX * sensitivity;
+    player.pitch -= e.movementY * sensitivity;
+    player.pitch = Math.max(-1.48, Math.min(1.48, player.pitch));
+  }
+});
+
+// Simple touch controls (mobile)
+const btnForward = document.getElementById('btnForward');
+const btnBack = document.getElementById('btnBack');
+const btnLeft = document.getElementById('btnLeft');
+const btnRight = document.getElementById('btnRight');
+const btnJump = document.getElementById('btnJump');
+function makeTouch(btn, on, off){
+  btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); on(); });
+  btn.addEventListener('touchend', (e)=>{ e.preventDefault(); off(); });
+  btn.addEventListener('mousedown', ()=>on());
+  btn.addEventListener('mouseup', ()=>off());
+}
+makeTouch(btnForward, ()=>input.forward=true, ()=>input.forward=false);
+makeTouch(btnBack, ()=>input.back=true, ()=>input.back=false);
+makeTouch(btnLeft, ()=>input.left=true, ()=>input.left=false);
+makeTouch(btnRight, ()=>input.right=true, ()=>input.right=false);
+makeTouch(btnJump, ()=>{ if(player.grounded){ player.velY = JUMP_V; player.grounded=false; } }, ()=>{});
+
+// ---- Collision with simple terrain height (flat) and avoid falling below ground ----
+function getGroundHeight(x,z){
+  // flat ground at y=0; we can add simple hills with sin for variety
+  const h = Math.sin(x*0.0012)*18 + Math.cos(z*0.0014)*10;
+  return h; // baseline height
+}
+
+// ---- Main render loop ----
+let proj = Mat4(); perspective(proj, Math.PI/3, canvas.width/canvas.height, 5, 4000);
+let view = Mat4();
+
+function render(time){
+  resizeCanvasToDisplaySize(canvas);
+  // recalc projection in case of resize
+  perspective(proj, Math.PI/3, canvas.width/canvas.height, 5, 4000);
+
+  // physics step (fixed-ish step)
+  updatePhysics( Math.min(0.04, (time-lastTime)/1000) );
+  lastTime = time;
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.clearColor(0.35, 0.6, 0.9, 1.0); // sky-like
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  // camera target based on pitch & yaw
+  const cosP = Math.cos(player.pitch), sinP = Math.sin(player.pitch);
+  const cosY = Math.cos(player.yaw), sinY = Math.sin(player.yaw);
+  const lookDir = [ cosP * -sinY, sinP, cosP * -cosY ];
+  const eye = [ player.x, player.y + 10, player.z ];
+  const center = [ eye[0] + lookDir[0], eye[1] + lookDir[1], eye[2] + lookDir[2] ];
+  lookAt(view, eye, center, [0,1,0]);
+
+  gl.useProgram(program);
+  setQuadAttribs();
+  gl.uniformMatrix4fv(u_proj, false, proj);
+  gl.uniformMatrix4fv(u_view, false, view);
+
+  // draw many trees as billboards
+  for(let t of trees){
+    gl.uniform3f(u_billPos, t.x, getGroundHeight(t.x, t.z), t.z);
+    gl.uniform2f(u_billSize, t.width, t.height);
+    gl.uniform3f(u_color, t.color[0], t.color[1], t.color[2]);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  // draw a simple ground grid using GL lines (so it overlays under trees nicely)
+  drawGroundGrid();
+
+  requestAnimationFrame(render);
+}
+
+function drawGroundGrid(){
+  // We'll render a grid on ground using WebGL's LINES via 2D overlay via gl.bufferData each frame; it's simple and cheap for demo
+  const gridSize = 2000, spacing = 100;
+  const lines = [];
+  const half = gridSize/2;
+  for(let x=-half; x<=half; x+=spacing){
+    lines.push(x, 0, -half,  x, 0, half);
+  }
+  for(let z=-half; z<=half; z+=spacing){
+    lines.push(-half, 0, z,  half, 0, z);
+  }
+  // simple shader-free draw with gl.LINES by constructing simple positions in clip-space via matmul projection*view
+  // To keep code short: use canvas 2D overlay to draw grid on screen
+  const ctx2 = canvas.getContext('2d');
+  // draw transparent overlay grid
+  ctx2.clearRect(0,0,canvas.width,canvas.height); // clear 2d, but beware we already have WebGL; this overlays atop canvas - acceptable for demo
+  ctx2.fillStyle = '#2b3f2b';
+  ctx2.fillRect(0, canvas.height*0.5, canvas.width, canvas.height*0.5 + 2); // simple ground tint bottom half
+  ctx2.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx2.lineWidth = 1;
+  // small horizon line
+  ctx2.beginPath();
+  ctx2.moveTo(0, canvas.height*0.5);
+  ctx2.lineTo(canvas.width, canvas.height*0.5);
+  ctx2.stroke();
+  // NOTE: This 2D overlay is a cheap way to give a ground feeling; the trees are in WebGL above.
+}
+
+// ---- Physics + movement ----
+let lastTime = performance.now();
+function updatePhysics(dt){
+  // movement vector in camera-plane
+  const forward = (input.forward?1:0) - (input.back?1:0);
+  const right = (input.right?1:0) - (input.left?1:0);
+  // compute camera right & forward in XZ plane
+  const sinY = Math.sin(player.yaw), cosY = Math.cos(player.yaw);
+  const camForward = [-sinY, 0, -cosY];
+  const camRight = [cosY, 0, -sinY];
+
+  // normalize input to avoid faster diagonal movement
+  let mag = Math.hypot(forward, right);
+  if(mag>1){ forward/=mag; right/=mag; }
+
+  // desired velocity
+  const vx = (camForward[0]*forward + camRight[0]*right) * player.speed;
+  const vz = (camForward[2]*forward + camRight[2]*right) * player.speed;
+
+  // simple damping for smooth start/stop (reduce ice/sliding)
+  const damping = 12; // higher => snappier
+  player.x += (vx - 0) * dt; // immediate set for responsive control
+  player.z += (vz - 0) * dt;
+
+  // gravity & jump
+  player.velY += GRAVITY * dt;
+  player.y += player.velY * dt;
+
+  // ground collision / height
+  const groundH = getGroundHeight(player.x, player.z) + 12; // offset to stand above ground
+  if(player.y <= groundH){
+    player.y = groundH;
+    player.velY = 0;
+    player.grounded = true;
+  } else {
+    player.grounded = false;
+  }
+
+  // keep inside world bounds
+  const bound = world.width/2 - 40;
+  player.x = Math.max(-bound, Math.min(bound, player.x));
+  player.z = Math.max(-bound, Math.min(bound, player.z));
+}
+
+// start render
+requestAnimationFrame(render);
+
+</script>
+</body>
+</html>
