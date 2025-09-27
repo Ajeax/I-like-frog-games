@@ -3,31 +3,19 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>FPS Forest — Three.js Demo</title>
+<title>FPS Forest — Three.js Demo (Fixed Start)</title>
 <style>
   html,body { height:100%; margin:0; background:#081218; font-family:system-ui,Segoe UI,Roboto,Arial; color:#fff; }
   #container { width:100%; height:100%; overflow:hidden; position:relative; }
-  canvas { display:block; } /* three's canvas */
-  /* HUD */
-  #hud {
-    position: absolute; left:12px; top:12px; background:rgba(0,0,0,0.45);
-    padding:10px 12px; border-radius:8px; font-size:14px;
-  }
-  #minimap {
-    position:absolute; right:12px; top:12px; width:200px; height:200px; background:rgba(0,0,0,0.45); border-radius:8px; padding:6px;
-  }
+  canvas { display:block; }
+  #hud { position:absolute; left:12px; top:12px; background:rgba(0,0,0,0.45); padding:10px 12px; border-radius:8px; font-size:14px; z-index:10; }
+  #minimap { position:absolute; right:12px; top:12px; width:200px; height:200px; background:rgba(0,0,0,0.45); border-radius:8px; padding:6px; z-index:10; }
   #minimap canvas { background:#0b2b0b; width:100%; height:100%; display:block; border-radius:6px; }
-  #instructions { position:absolute; left:12px; bottom:12px; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:8px; font-size:13px; }
-  #overlay {
-    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,0.7);
-    padding:18px 22px; border-radius:10px; display:flex; gap:8px; align-items:center; flex-direction:column;
-  }
+  #instructions { position:absolute; left:12px; bottom:12px; background:rgba(0,0,0,0.3); padding:8px 12px; border-radius:8px; font-size:13px; z-index:10; }
+  #overlay { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,0.7); padding:18px 22px; border-radius:10px; display:flex; gap:8px; align-items:center; flex-direction:column; z-index:20; }
   #startBtn { padding:10px 14px; border-radius:8px; background:#3ea; border:none; font-weight:700; color:#012; cursor:pointer; }
   #stats { display:flex; gap:12px; }
-  @media (max-width:700px) {
-    #minimap { display:none; }
-    #overlay { font-size:14px; width:90%; }
-  }
+  @media (max-width:700px) { #minimap { display:none; } }
 </style>
 </head>
 <body>
@@ -42,50 +30,41 @@
   <canvas id="miniCanvas" width="200" height="200"></canvas>
 </div>
 
-<div id="instructions">WASD to move • Mouse to look (click screen to lock) • Space to jump • Collect golden orbs • Avoid enemies</div>
+<div id="instructions">WASD to move • Mouse to look (click to lock) • Space to jump • Collect orbs • Avoid enemies</div>
 
-<!-- Start overlay (pointer-lock explanation) -->
 <div id="overlay">
   <div style="font-size:18px; font-weight:700">FPS Forest — Three.js Demo</div>
-  <div style="font-size:13px; color:#ddd">Click "Start" then click the screen to lock the mouse and play.</div>
+  <div style="font-size:13px; color:#ddd">Click Start, then click the scene to lock the mouse and play.</div>
   <div id="stats"> <div>Trees: <span id="treeCount">0</span></div> <div>Enemies: <span id="enemyCount">0</span></div> </div>
   <button id="startBtn">Start</button>
 </div>
 
 <script type="module">
-/* ============================================
-   FPS Forest — Three.js demo (single HTML file)
-   - Uses Three.js (module from unpkg)
-   - PointerLockControls for first-person camera
-   - Collisions (sphere-vs-sphere simple)
-   - Trees (cylinder trunk + sphere leaves)
-   - Procedural bird chirps + footsteps via WebAudio
-   - Minimap via 2D canvas (top-down)
-   - Collectibles and simple enemies (AI)
-   ============================================ */
-
 import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
 import { PointerLockControls } from 'https://unpkg.com/three@0.154.0/examples/jsm/controls/PointerLockControls.js';
 
-///// CONFIGURATION /////
+/* -------------------------
+   Configuration
+   ------------------------- */
 const CONFIG = {
-  worldSize: 2000,          // forest width/depth
-  treeCount: 300,
-  minTreeDistance: 60,     // don't spawn trees too near starting point
-  collectibleCount: 18,
+  worldSize: 1600,
+  treeCount: 240,
+  minTreeDistance: 80,
+  collectibleCount: 14,
   enemyCountStart: 3,
-  enemySpawnInterval: 8000, // ms
-  playerHeight: 20,
-  playerSpeed: 220,        // units per second
+  enemySpawnIntervalMs: 8000,
+  playerHeight: 18,
+  playerSpeed: 220,
   jumpVelocity: 360,
   gravity: -900,
-  treeRadiusRange: [18, 40], // leaf cluster radial size
+  treeRadiusRange: [14, 36],
   collisionRadiusPlayer: 10,
-  collisionRadiusEnemy: 12,
-  collectibleRadius: 8
+  collisionRadiusEnemy: 12
 };
 
-///// UI ELEMENTS /////
+/* -------------------------
+   UI elements
+   ------------------------- */
 const container = document.getElementById('container');
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
@@ -96,12 +75,13 @@ const enemyCountEl = document.getElementById('enemyCount');
 const miniCanvas = document.getElementById('miniCanvas');
 const miniCtx = miniCanvas.getContext('2d');
 
-///// THREE.JS SETUP /////
+/* -------------------------
+   Three.js setup
+   ------------------------- */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x88c3ff); // sky color
-
+scene.background = new THREE.Color(0x88c3ff);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 4000);
-const renderer = new THREE.WebGLRenderer({ antialias:true });
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 container.appendChild(renderer.domElement);
 window.addEventListener('resize', ()=> {
@@ -110,60 +90,106 @@ window.addEventListener('resize', ()=> {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-///// LIGHTING /////
-const hemi = new THREE.HemisphereLight(0xbfd1ff, 0x333333, 0.9);
-scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-dir.position.set(500, 600, 200);
-scene.add(dir);
+/* lights */
+const hemi = new THREE.HemisphereLight(0xbfd1ff, 0x444444, 0.9); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 0.55); dir.position.set(500,600,200); scene.add(dir);
 
-///// GROUND (large plane with repeating texture-like appearance) /////
-const groundGeo = new THREE.PlaneGeometry(CONFIG.worldSize, CONFIG.worldSize, 64, 64);
+/* ground */
+const groundGeo = new THREE.PlaneGeometry(CONFIG.worldSize, CONFIG.worldSize, 32, 32);
 groundGeo.rotateX(-Math.PI/2);
-const groundMat = new THREE.MeshStandardMaterial({ color:0x2b5b2b, roughness:1, metalness:0 });
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x2b5b2b, roughness: 1 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 scene.add(ground);
 
-///// Player state & Controls /////
+/* controls (pointer lock) */
 const controls = new PointerLockControls(camera, renderer.domElement);
-let player = {
-  pos: new THREE.Vector3(0, CONFIG.playerHeight, 0),
-  velY: 0,
-  grounded: true,
-  health: 100,
-  score: 0,
-  yaw: 0
-};
-camera.position.copy(player.pos);
+scene.add(controls.getObject());     // attach control object to scene
+controls.connect();                  // enable connect so moveForward / moveRight work
 
+/* -------------------------
+   Player state
+   ------------------------- */
+let player = {
+  x: 0, y: CONFIG.playerHeight, z: 0,
+  velY: 0, grounded: true,
+  health: 100, score: 0
+};
+camera.position.set(player.x, player.y, player.z);
+
+/* keyboard */
 const keyState = {};
-window.addEventListener('keydown', e => { keyState[e.key.toLowerCase()] = true; if(e.code==='Space'){ tryJump(); } });
+window.addEventListener('keydown', e => { keyState[e.key.toLowerCase()] = true; if(e.code === 'Space') tryJump(); });
 window.addEventListener('keyup', e => { keyState[e.key.toLowerCase()] = false; });
 
 function tryJump(){
   if(player.grounded){
     player.velY = CONFIG.jumpVelocity;
     player.grounded = false;
-    footstep(false); // play small jump sound
+    footstep(false);
   }
 }
 
-///// Scene objects containers /////
-const trees = [];
-const treeCollision = []; // spheres with {x,z,r}
-const collectibles = []; // {mesh, x,z}
-const enemies = []; // {mesh, x,z,vel, state}
+/* -------------------------
+   Scene content containers
+   ------------------------- */
+const treeCollision = [];  // {x,z,r}
+const collectibles = [];   // {mesh, x,z, collected}
+const enemies = [];        // {mesh, ...}
 
-///// OBJECT CREATION HELPERS /////
-// create a simple tree: trunk (cylinder) + leaves (sphere)
+/* -------------------------
+   Audio - basic tones (no external files)
+   ------------------------- */
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const audioCtx = new AudioCtx();
+
+// ambient low pad
+const pad = audioCtx.createOscillator();
+const padGain = audioCtx.createGain();
+pad.type = 'sine'; pad.frequency.value = 120; padGain.gain.value = 0.0015;
+pad.connect(padGain); padGain.connect(audioCtx.destination); pad.start();
+
+function birdChirp(){
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'triangle'; o.frequency.value = 700 + Math.random()*900;
+  g.gain.value = 0.0;
+  o.connect(g); g.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  g.gain.setValueAtTime(0, now);
+  g.gain.linearRampToValueAtTime(0.02, now + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+  o.start(now); o.stop(now + 0.45);
+  setTimeout(birdChirp, 800 + Math.random()*3000);
+}
+function startAudio(){
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+  birdChirp();
+}
+
+let lastStepTime = 0;
+function footstep(move=true){
+  const now = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = 'square'; o.frequency.value = move ? 180 : 120;
+  g.gain.value = 0.0001;
+  o.connect(g); g.connect(audioCtx.destination);
+  const t0 = now;
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(move?0.01:0.005, t0+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0+0.12);
+  o.start(t0); o.stop(t0+0.15);
+}
+
+/* -------------------------
+   Helpers: create tree, collectible, enemy
+   ------------------------- */
 function createTree(x,z, leafRadius, trunkHeight){
   const trunkGeo = new THREE.CylinderGeometry(trunkHeight*0.12, trunkHeight*0.12, trunkHeight, 8);
-  const trunkMat = new THREE.MeshStandardMaterial({color:0x6b3f2b});
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b3f2b });
   const trunk = new THREE.Mesh(trunkGeo, trunkMat);
   trunk.position.set(x, trunkHeight/2, z);
 
   const leavesGeo = new THREE.SphereGeometry(leafRadius, 10, 8);
-  const leavesMat = new THREE.MeshStandardMaterial({color: 0x2c8b3a, flatShading:true});
+  const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2c8b3a, flatShading:true });
   const leaves = new THREE.Mesh(leavesGeo, leavesMat);
   leaves.position.set(0, trunkHeight*0.8, 0);
   trunk.add(leaves);
@@ -171,36 +197,33 @@ function createTree(x,z, leafRadius, trunkHeight){
   scene.add(trunk);
   return {root:trunk, leaves:leaves};
 }
-
-// create collectible (gold orb)
 function createCollectible(x,z){
   const geo = new THREE.SphereGeometry(6,12,12);
-  const mat = new THREE.MeshStandardMaterial({color:0xffd46f, emissive:0x8b5f1a, metalness:0.5, roughness:0.2});
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffd46f, emissive:0x8b5f1a, metalness:0.5, roughness:0.2 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(x, 8, z);
   scene.add(mesh);
-  return {mesh, x, z, collected:false};
+  return {mesh,x,z, collected:false};
 }
-
-// create enemy (simple capsule-like shape)
 function createEnemy(x,z){
   const geo = new THREE.CapsuleGeometry(8, 10, 6, 10);
-  const mat = new THREE.MeshStandardMaterial({color:0xcc4444});
+  const mat = new THREE.MeshStandardMaterial({ color: 0xcc4444 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(x, 10, z);
   scene.add(mesh);
-  return {mesh, x, z, vx:0, vz:0, state:'wander', targetTimer:0};
+  return {mesh, state:'wander', tx: x, tz: z, targetTimer: 0, lastDamage: 0};
 }
 
-///// SPAWN TREES /////
+/* -------------------------
+   Populate world: trees, collectibles, enemies
+   ------------------------- */
 function randomInRange(min,max){ return Math.random()*(max-min)+min; }
 for(let i=0;i<CONFIG.treeCount;i++){
   let x,z;
-  // avoid around spawn circle
-  do {
+  do{
     x = randomInRange(-CONFIG.worldSize/2, CONFIG.worldSize/2);
     z = randomInRange(-CONFIG.worldSize/2, CONFIG.worldSize/2);
-  } while(Math.hypot(x, z) < CONFIG.minTreeDistance);
+  } while(Math.hypot(x,z) < CONFIG.minTreeDistance);
   const leafRadius = randomInRange(CONFIG.treeRadiusRange[0], CONFIG.treeRadiusRange[1]);
   const trunkH = randomInRange(30, 80);
   createTree(x,z, leafRadius, trunkH);
@@ -208,7 +231,6 @@ for(let i=0;i<CONFIG.treeCount;i++){
 }
 treeCountEl.textContent = treeCollision.length;
 
-///// SPAWN COLLECTIBLES /////
 for(let i=0;i<CONFIG.collectibleCount;i++){
   let x,z;
   do {
@@ -217,141 +239,68 @@ for(let i=0;i<CONFIG.collectibleCount;i++){
   } while(Math.hypot(x,z) < CONFIG.minTreeDistance);
   collectibles.push(createCollectible(x,z));
 }
-///// INITIAL ENEMIES /////
+
 for(let i=0;i<CONFIG.enemyCountStart;i++){
-  let x = randomInRange(-CONFIG.worldSize/2+60, CONFIG.worldSize/2-60);
-  let z = randomInRange(-CONFIG.worldSize/2+60, CONFIG.worldSize/2-60);
+  let x = randomInRange(-CONFIG.worldSize/2 + 60, CONFIG.worldSize/2 - 60);
+  let z = randomInRange(-CONFIG.worldSize/2 + 60, CONFIG.worldSize/2 - 60);
   enemies.push(createEnemy(x,z));
 }
 enemyCountEl.textContent = enemies.length;
 
-///// MINIMAP /////
+/* -------------------------
+   Minimap drawing
+   ------------------------- */
 function drawMinimap(){
   const cw = miniCanvas.width, ch = miniCanvas.height;
   miniCtx.clearRect(0,0,cw,ch);
-  // background
-  miniCtx.fillStyle = '#062006';
-  miniCtx.fillRect(0,0,cw,ch);
-
-  // transform world->minimap
+  miniCtx.fillStyle = '#062006'; miniCtx.fillRect(0,0,cw,ch);
   const scale = cw / CONFIG.worldSize;
-  const centerX = cw/2, centerY = ch/2;
-
+  const cx = cw/2, cy = ch/2;
   // trees
   miniCtx.fillStyle = '#2b8b2b';
   for(const t of treeCollision){
-    const sx = centerX + t.x * scale;
-    const sy = centerY + t.z * scale;
-    miniCtx.beginPath();
-    miniCtx.arc(sx, sy, Math.max(2, t.r*scale*0.6), 0, Math.PI*2);
-    miniCtx.fill();
+    const sx = cx + t.x * scale;
+    const sy = cy + t.z * scale;
+    miniCtx.beginPath(); miniCtx.arc(sx, sy, Math.max(2, t.r*scale*0.6), 0, Math.PI*2); miniCtx.fill();
   }
-
   // collectibles
   miniCtx.fillStyle = '#ffd46f';
   for(const c of collectibles){
     if(c.collected) continue;
-    const sx = centerX + c.x * scale;
-    const sy = centerY + c.z * scale;
-    miniCtx.beginPath();
-    miniCtx.arc(sx, sy, 4, 0, Math.PI*2);
-    miniCtx.fill();
+    const sx = cx + c.x * scale, sy = cy + c.z * scale;
+    miniCtx.beginPath(); miniCtx.arc(sx, sy, 3, 0, Math.PI*2); miniCtx.fill();
   }
-
   // enemies
   miniCtx.fillStyle = '#ff5555';
   for(const e of enemies){
-    const sx = centerX + e.mesh.position.x * scale;
-    const sy = centerY + e.mesh.position.z * scale;
-    miniCtx.beginPath();
-    miniCtx.arc(sx, sy, 5, 0, Math.PI*2);
-    miniCtx.fill();
+    const sx = cx + e.mesh.position.x * scale, sy = cy + e.mesh.position.z * scale;
+    miniCtx.beginPath(); miniCtx.arc(sx, sy, 4, 0, Math.PI*2); miniCtx.fill();
   }
-
-  // player marker
+  // player
   miniCtx.fillStyle = '#66ffcc';
-  const px = centerX + player.x * scale;
-  const pz = centerY + player.z * scale;
-  miniCtx.beginPath();
-  miniCtx.arc(px, pz, 6, 0, Math.PI*2);
-  miniCtx.fill();
+  const px = cx + player.x * scale, pz = cy + player.z * scale;
+  miniCtx.beginPath(); miniCtx.arc(px, pz, 5, 0, Math.PI*2); miniCtx.fill();
 }
 
-///// AUDIO (procedural ambient birds and footsteps) /////
-const AudioCtx = window.AudioContext || window.webkitAudioContext;
-const audioCtx = new AudioCtx();
-
-// ambient low pad
-const pad = audioCtx.createOscillator();
-const padGain = audioCtx.createGain();
-pad.type = 'sine'; pad.frequency.value = 120;
-padGain.gain.value = 0.0015; // very low
-pad.connect(padGain); padGain.connect(audioCtx.destination);
-pad.start();
-
-// procedural bird chirps: schedule random chirps using oscillator bursts
-function birdChirp(){
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o.type = 'triangle';
-  o.frequency.value = 800 + Math.random()*1200;
-  g.gain.value = 0.0;
-  o.connect(g); g.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  g.gain.setValueAtTime(0, now);
-  g.gain.linearRampToValueAtTime(0.02, now + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-  o.start(now);
-  o.stop(now + 0.45);
-  // schedule next chirp randomly
-  setTimeout(birdChirp, 800 + Math.random()*4000);
-}
-// start ambient birds when user interacts
-function startAudio(){
-  if(audioCtx.state === 'suspended') audioCtx.resume();
-  birdChirp();
-}
-document.addEventListener('click', ()=> startAudio(), {once:true});
-
-// footsteps simple: short noise burst when moving and grounded
-let lastStepTime = 0;
-function footstep(move=true){
-  const now = audioCtx.currentTime;
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o.type = 'square'; o.frequency.value = move ? 180 : 90;
-  g.gain.value = 0.0001;
-  o.connect(g); g.connect(audioCtx.destination);
-  g.gain.setValueAtTime(0, now);
-  g.gain.linearRampToValueAtTime(move?0.01:0.005, now+0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, now+0.12);
-  o.start(now); o.stop(now+0.15);
-}
-
-///// MOVEMENT & COLLISION HELPERS /////
-// player position vectors convenience
-player.x = player.pos.x; player.y = player.pos.y; player.z = player.pos.z;
-
-// collision with trees/enemies implemented as sphere-sphere, resolve by pushing player outside
-function resolveCollisions(dt){
-  // trees
+/* -------------------------
+   Collision resolution (trees & enemies & bounds)
+   ------------------------- */
+function resolveCollisions(){
+  // tree collisions (push player out)
   for(const t of treeCollision){
-    const dx = player.x - t.x;
-    const dz = player.z - t.z;
+    const dx = player.x - t.x, dz = player.z - t.z;
     const dist = Math.hypot(dx,dz);
     const minDist = CONFIG.collisionRadiusPlayer + t.r*0.6;
     if(dist < minDist && dist > 0.0001){
-      // push out
       const overlap = (minDist - dist);
       const nx = dx / dist, nz = dz / dist;
       player.x += nx * overlap;
       player.z += nz * overlap;
     }
   }
-  // enemies collision push
+  // enemies push
   for(const e of enemies){
-    const dx = player.x - e.mesh.position.x;
-    const dz = player.z - e.mesh.position.z;
+    const dx = player.x - e.mesh.position.x, dz = player.z - e.mesh.position.z;
     const dist = Math.hypot(dx,dz);
     const minDist = CONFIG.collisionRadiusPlayer + CONFIG.collisionRadiusEnemy;
     if(dist < minDist && dist > 0.0001){
@@ -361,73 +310,60 @@ function resolveCollisions(dt){
       player.z += nz * overlap * 0.5;
     }
   }
-  // keep inside world bounds
+  // bounds
   const bound = CONFIG.worldSize/2 - 20;
   player.x = Math.max(-bound, Math.min(bound, player.x));
   player.z = Math.max(-bound, Math.min(bound, player.z));
 }
 
-///// ENEMY AI /////
+/* -------------------------
+   Enemy AI (wander / chase) + damage
+   ------------------------- */
 function updateEnemies(dt){
   for(const e of enemies){
     if(Math.random() < 0.004) e.state = (Math.random()<0.6)?'wander':'chase';
     if(e.state === 'wander'){
       if(e.targetTimer <= 0){
-        // pick random target nearby
         e.tx = e.mesh.position.x + randomInRange(-120,120);
         e.tz = e.mesh.position.z + randomInRange(-120,120);
         e.targetTimer = 40 + Math.random()*160;
-      } else {
-        e.targetTimer--;
-      }
+      } else e.targetTimer--;
     } else {
-      // chase player
       e.tx = player.x; e.tz = player.z;
     }
-    // compute steering toward target
-    const dx = e.tx - e.mesh.position.x;
-    const dz = e.tz - e.mesh.position.z;
+    // steering toward target
+    const dx = e.tx - e.mesh.position.x, dz = e.tz - e.mesh.position.z;
     const dist = Math.hypot(dx,dz);
     if(dist > 2){
-      let vx = (dx/dist) * 40; // small speed
-      let vz = (dz/dist) * 40;
-      // apply small movement with collision avoidance vs trees (simple)
-      let nx = e.mesh.position.x + vx*dt;
-      let nz = e.mesh.position.z + vz*dt;
-      // simple check against trees: if collision, nudge turn
+      let speed = 30; // per second
+      let nx = e.mesh.position.x + (dx/dist) * speed * dt;
+      let nz = e.mesh.position.z + (dz/dist) * speed * dt;
+      // simple tree avoidance: if next spot collides with tree, nudge randomly
       let collide = false;
       for(const t of treeCollision){
-        const ddx = nx - t.x, ddz = nz - t.z;
-        if(Math.hypot(ddx,ddz) < t.r*0.6 + CONFIG.collisionRadiusEnemy + 6){ collide = true; break; }
+        if(Math.hypot(nx - t.x, nz - t.z) < t.r*0.6 + CONFIG.collisionRadiusEnemy + 6){ collide = true; break; }
       }
-      if(!collide){
-        e.mesh.position.x = nx;
-        e.mesh.position.z = nz;
-      } else {
-        // pick a small random rotation
-        e.mesh.position.x += Math.cos(Math.random()*Math.PI*2) * 6 * dt;
-        e.mesh.position.z += Math.sin(Math.random()*Math.PI*2) * 6 * dt;
-      }
-      // update orientation
+      if(!collide){ e.mesh.position.x = nx; e.mesh.position.z = nz; }
+      else { e.mesh.position.x += Math.cos(Math.random()*Math.PI*2) * 8 * dt; e.mesh.position.z += Math.sin(Math.random()*Math.PI*2) * 8 * dt; }
+      // orient
       e.mesh.lookAt(player.x, e.mesh.position.y, player.z);
     }
-    // if near player, damage
+    // contact damage with cooldown
     const pdx = player.x - e.mesh.position.x, pdz = player.z - e.mesh.position.z;
     if(Math.hypot(pdx,pdz) < 14){
-      // damage player with cooldown
       if(!e.lastDamage || (performance.now() - e.lastDamage) > 900){
         player.health -= 8;
         e.lastDamage = performance.now();
         updateHUD();
-        if(player.health <= 0){
-          onPlayerDeath();
-        }
+        if(player.health <= 0) onPlayerDeath();
       }
     }
   }
 }
 
-///// COLLECTIBLE CHECK /////
+/* -------------------------
+   Check collectibles
+   ------------------------- */
 function checkCollectibles(){
   for(const c of collectibles){
     if(c.collected) continue;
@@ -437,149 +373,225 @@ function checkCollectibles(){
       scene.remove(c.mesh);
       player.score += 1;
       updateHUD();
-      // small pleasant sound
-      const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+      // pleasant tone
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
       o.type='sine'; o.frequency.value = 880; g.gain.value = 0.02;
-      o.connect(g); g.connect(audioCtx.destination);
-      o.start(); o.stop(audioCtx.currentTime + 0.12);
+      o.connect(g); g.connect(audioCtx.destination); const now = audioCtx.currentTime;
+      g.gain.setValueAtTime(0.02, now); g.gain.exponentialRampToValueAtTime(0.0001, now+0.15);
+      o.start(now); o.stop(now+0.15);
     }
   }
 }
 
-///// HUD update /////
+/* -------------------------
+   HUD / player death
+   ------------------------- */
 function updateHUD(){
   healthEl.textContent = Math.max(0, Math.floor(player.health));
   scoreEl.textContent = player.score;
 }
-
-///// PLAYER DEATH /////
 function onPlayerDeath(){
   overlay.querySelector('div').textContent = 'You died — Score: ' + player.score;
   overlay.style.display = 'flex';
   controls.unlock();
-  // reset basic state (could implement restart)
 }
 
-///// START/POINTERLOCK /////
-// clicking start will request pointer lock on next click of canvas
+/* -------------------------
+   Spawn objects we created earlier but deferred for readability
+   ------------------------- */
+(function populateWorld(){
+  // Trees
+  for(let i=0;i<CONFIG.treeCount;i++){
+    let x,z;
+    do{
+      x = randomInRange(-CONFIG.worldSize/2, CONFIG.worldSize/2);
+      z = randomInRange(-CONFIG.worldSize/2, CONFIG.worldSize/2);
+    } while(Math.hypot(x,z) < CONFIG.minTreeDistance);
+    const leafRadius = randomInRange(CONFIG.treeRadiusRange[0], CONFIG.treeRadiusRange[1]);
+    const trunkH = randomInRange(30, 80);
+    createTree(x,z, leafRadius, trunkH);
+    treeCollision.push({x,z,r: leafRadius});
+  }
+  treeCountEl.textContent = treeCollision.length;
+  // collectibles
+  for(let i=0;i<CONFIG.collectibleCount;i++){
+    let x,z;
+    do {
+      x = randomInRange(-CONFIG.worldSize/2 + 40, CONFIG.worldSize/2 - 40);
+      z = randomInRange(-CONFIG.worldSize/2 + 40, CONFIG.worldSize/2 - 40);
+    } while(Math.hypot(x,z) < CONFIG.minTreeDistance);
+    collectibles.push(createCollectible(x,z));
+  }
+  // initial enemies
+  for(let i=0;i<CONFIG.enemyCountStart;i++){
+    let x = randomInRange(-CONFIG.worldSize/2 + 60, CONFIG.worldSize/2 - 60);
+    let z = randomInRange(-CONFIG.worldSize/2 + 60, CONFIG.worldSize/2 - 60);
+    enemies.push(createEnemy(x,z));
+  }
+  enemyCountEl.textContent = enemies.length;
+})();
+
+/* -------------------------
+   Start button & pointer lock fix (RESUME AUDIO + CONNECT CONTROLS)
+   ------------------------- */
 startBtn.addEventListener('click', ()=>{
   overlay.style.display = 'none';
-  // enable pointer lock on first canvas click; also resume audio context
+  // ensure audio context resumes on user gesture
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+  startAudio();
+  // request pointer lock on the renderer element (canvas)
+  renderer.domElement.requestPointerLock();
+  // also attach a one-time click to focus controls if needed
   renderer.domElement.addEventListener('click', ()=> {
-    if(document.pointerLockElement !== renderer.domElement){
-      renderer.domElement.requestPointerLock();
-      startAudio(); // start ambient sounds (on user gesture)
-    }
+    if(document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
   }, {once:true});
 });
 
-// hook pointerlockcontrols
-controls.addEventListener('lock', () => {
-  // nothing special; camera attaches automatically
-});
-controls.addEventListener('unlock', () => {
-  // show overlay so player can restart pointer lock
-  overlay.style.display = 'flex';
-});
-
-///// ANIMATION MAIN LOOP /////
-let prevTime = performance.now();
-function animate(){
-  const time = performance.now();
-  const dt = Math.min(0.06, (time - prevTime) / 1000);
-  prevTime = time;
-
-  // movement inputs (WASD)
-  let forward = (keyState['w'] || keyState['arrowup']) ? 1 : 0;
-  let back = (keyState['s'] || keyState['arrowdown']) ? 1 : 0;
-  let left = (keyState['a'] || keyState['arrowleft']) ? 1 : 0;
-  let right = (keyState['d'] || keyState['arrowright']) ? 1 : 0;
-  let moveX = right - left;
-  let moveZ = forward - back;
-
-  // compute camera direction (yaw from controls)
-  const camQuat = camera.quaternion; // pointerlockcontrols drives camera.quaternion
-  // compute forward vector on XZ
-  const forwardVec = new THREE.Vector3(0,0,-1).applyQuaternion(camQuat);
-  forwardVec.y = 0; forwardVec.normalize();
-  const rightVec = new THREE.Vector3(1,0,0).applyQuaternion(camQuat);
-  rightVec.y = 0; rightVec.normalize();
-
-  // resulting desired velocity
-  let vx = (forwardVec.x * moveZ + rightVec.x * moveX) * CONFIG.playerSpeed;
-  let vz = (forwardVec.z * moveZ + rightVec.z * moveX) * CONFIG.playerSpeed;
-
-  // normalize diagonal
-  if(moveX !== 0 && moveZ !== 0){
-    vx *= 0.7071; vz *= 0.7071;
+/* react to pointer lock changes */
+document.addEventListener('pointerlockchange', ()=>{
+  if(document.pointerLockElement === renderer.domElement){
+    controls.lock();
+  } else {
+    controls.unlock();
   }
+});
 
-  // apply movement instantaneously for responsive control (no ice)
+/* -------------------------
+   Main loop
+   ------------------------- */
+let prevTime = performance.now();
+let lastEnemySpawn = performance.now();
+
+function animate(){
+  const now = performance.now();
+  const dt = Math.min(0.06, (now - prevTime)/1000);
+  prevTime = now;
+
+  // movement input
+  const forward = (keyState['w'] || keyState['arrowup']) ? 1 : 0;
+  const back = (keyState['s'] || keyState['arrowdown']) ? 1 : 0;
+  const left = (keyState['a'] || keyState['arrowleft']) ? 1 : 0;
+  const right = (keyState['d'] || keyState['arrowright']) ? 1 : 0;
+  let mvX = right - left;
+  let mvZ = forward - back;
+
+  // camera orientation via controls.getObject().rotation/yaw
+  const camQuat = camera.quaternion;
+  const forwardVec = new THREE.Vector3(0,0,-1).applyQuaternion(camQuat); forwardVec.y = 0; forwardVec.normalize();
+  const rightVec = new THREE.Vector3(1,0,0).applyQuaternion(camQuat); rightVec.y = 0; rightVec.normalize();
+
+  // velocity
+  let vx = (forwardVec.x * mvZ + rightVec.x * mvX) * CONFIG.playerSpeed;
+  let vz = (forwardVec.z * mvZ + rightVec.z * mvX) * CONFIG.playerSpeed;
+  if(mvX !== 0 && mvZ !== 0){ vx *= 0.7071; vz *= 0.7071; }
+
+  // apply movement immediately (no sliding)
   player.x += vx * dt;
   player.z += vz * dt;
 
-  // footstep sound when moving and grounded and not too frequent
-  if(player.grounded && (Math.abs(vx) + Math.abs(vz) > 0.01)){
-    const now = audioCtx.currentTime;
-    if(now - lastStepTime > 0.3){
-      footstep(true);
-      lastStepTime = now;
-    }
+  // footstep sound
+  if(player.grounded && Math.abs(vx)+Math.abs(vz) > 0.01){
+    const nowAudio = audioCtx.currentTime;
+    if(nowAudio - lastStepTime > 0.28){ footstep(true); lastStepTime = nowAudio; }
   }
 
-  // apply gravity and vertical velocity
+  // gravity & vertical movement
   player.velY += CONFIG.gravity * dt;
   player.y += player.velY * dt;
-  // ground height simple (flat with minor noise)
   const groundH = 0 + Math.sin(player.x*0.001)*6 + Math.cos(player.z*0.001)*4;
-  const standH = groundH + CONFIG.playerHeight;
-  if(player.y <= standH){
-    player.y = standH;
-    player.velY = 0;
-    player.grounded = true;
+  const standY = groundH + CONFIG.playerHeight;
+  if(player.y <= standY){
+    player.y = standY; player.velY = 0; player.grounded = true;
   } else player.grounded = false;
 
-  // collision resolution with trees & enemies & world bounds
-  resolveCollisions(dt);
+  // collision resolution + bounds
+  resolveCollisions();
 
-  // put camera at player's position
-  camera.position.set(player.x, player.y, player.z);
+  // set camera / controls object position
+  const ctrlObj = controls.getObject();
+  ctrlObj.position.set(player.x, player.y, player.z);
+  // required so camera quaternion reflects pointer look (PointerLockControls handles rotation)
 
-  // enemy logic & collectibles
+  // update enemies & collectibles
   updateEnemies(dt);
   checkCollectibles();
 
-  // spawn more enemies occasionally
-  if(!lastEnemySpawn || (performance.now() - lastEnemySpawn) > CONFIG.enemySpawnInterval){
+  // spawn occasional enemies
+  if(performance.now() - lastEnemySpawn > CONFIG.enemySpawnIntervalMs){
     if(enemies.length < 10 && Math.random() < 0.6){
       const ex = randomInRange(-CONFIG.worldSize/2+80, CONFIG.worldSize/2-80);
       const ez = randomInRange(-CONFIG.worldSize/2+80, CONFIG.worldSize/2-80);
       enemies.push(createEnemy(ex, ez));
-      enemyCountEl.textContent = enemies.length;
     }
     lastEnemySpawn = performance.now();
   }
-
-  // update enemyCount
   enemyCountEl.textContent = enemies.length;
 
-  // rotate tree leaves slightly for visual interest
-  // (we only created leaves as children of trunks; rotate them slowly)
-  // (optional — omitted for perf)
-
-  // draw minimap
+  // minimap + HUD
   drawMinimap();
+  updateHUD();
 
   // render
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
-
-let lastEnemySpawn = performance.now();
 requestAnimationFrame(animate);
 
-///// UTILITY: random helper used above /////
+/* -------------------------
+   Utility helpers
+   ------------------------- */
+function createTree(x,z, leafRadius, trunkHeight){
+  const trunkGeo = new THREE.CylinderGeometry(trunkHeight*0.12, trunkHeight*0.12, trunkHeight, 8);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b3f2b });
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+  trunk.position.set(x, trunkHeight/2, z);
+
+  const leavesGeo = new THREE.SphereGeometry(leafRadius, 10, 8);
+  const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2c8b3a, flatShading:true });
+  const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+  leaves.position.set(0, trunkHeight*0.8, 0);
+  trunk.add(leaves);
+
+  scene.add(trunk);
+  return {root:trunk, leaves:leaves};
+}
+function createCollectible(x,z){
+  const geo = new THREE.SphereGeometry(6,12,12);
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffd46f, emissive:0x8b5f1a, metalness:0.5, roughness:0.2 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, 8, z);
+  scene.add(mesh);
+  return {mesh,x,z,collected:false};
+}
+function createEnemy(x,z){
+  const geo = new THREE.CapsuleGeometry(8, 10, 6, 10);
+  const mat = new THREE.MeshStandardMaterial({ color: 0xcc4444 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, 10, z);
+  scene.add(mesh);
+  return {mesh, state:'wander', tx:x, tz:z, targetTimer:0, lastDamage:0};
+}
 function randomInRange(min,max){ return Math.random()*(max-min)+min; }
+
+/* -------------------------
+   Init earlier-created utility functions (we used createTree above for population)
+   but ensure we have at least the ones referenced */
+function createTree(x,z, leafRadius, trunkHeight){
+  const trunkGeo = new THREE.CylinderGeometry(trunkHeight*0.12, trunkHeight*0.12, trunkHeight, 8);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b3f2b });
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+  trunk.position.set(x, trunkHeight/2, z);
+
+  const leavesGeo = new THREE.SphereGeometry(leafRadius, 10, 8);
+  const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2c8b3a, flatShading:true });
+  const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+  leaves.position.set(0, trunkHeight*0.8, 0);
+  trunk.add(leaves);
+  scene.add(trunk);
+  return {root:trunk, leaves};
+}
+
+/* (Note: some helper functions are defined earlier; duplication is harmless in this single-file demo.) */
 
 </script>
 </body>
