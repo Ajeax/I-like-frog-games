@@ -1,8 +1,57 @@
-<html>
-<title> Ai Games </title>
-  <main>
-    <h1> Frog Ai's </h1>
-    <a href="page2.html">page2</a>
-    <h2> insert text here </h2>
-  </main>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Game Launcher</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background: linear-gradient(135deg, #222, #444);
+      color: white;
+    }
+    .menu {
+      text-align: center;
+    }
+    h1 {
+      margin-bottom: 20px;
+    }
+    .game-button {
+      display: block;
+      margin: 10px auto;
+      padding: 15px 30px;
+      font-size: 18px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+      width: 200px;
+    }
+    .game-button:hover {
+      background: #45a049;
+    }
+    @media (max-width: 600px) {
+      .game-button {
+        width: 80%;
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="menu">
+    <h1>Game Launcher</h1>
+    <button class="game-button" onclick="location.href='pong.html'">Play Pong</button>
+    <!-- Add more games like this:
+    <button class="game-button" onclick="location.href='game2.html'">Game 2</button>
+    -->
+  </div>
+</body>
 </html>
