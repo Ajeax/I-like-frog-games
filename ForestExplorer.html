@@ -3,24 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>FPS Forest — Fixed Start</title>
+<title>FPS Forest — Auto Start</title>
 <style>
   html,body { margin:0; height:100%; overflow:hidden; background:#081218; font-family:sans-serif; color:white; }
-  #overlay {
-    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-    background:rgba(0,0,0,0.7); padding:20px; border-radius:10px; text-align:center;
-    z-index:10;
-  }
-  #startBtn { padding:10px 16px; border:none; border-radius:8px; background:#3ea; font-weight:bold; cursor:pointer; }
   #hud { position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.4); padding:6px 10px; border-radius:8px; z-index:5; }
 </style>
 </head>
 <body>
-<div id="overlay">
-  <h2>FPS Forest</h2>
-  <p>Click Start, then click the screen to capture mouse.<br/>WASD = move, Space = jump.</p>
-  <button id="startBtn">Start</button>
-</div>
 <div id="hud">Health: <span id="health">100</span> | Score: <span id="score">0</span></div>
 <div id="container"></div>
 
@@ -28,7 +17,7 @@
 import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
 import { PointerLockControls } from 'https://unpkg.com/three@0.154.0/examples/jsm/controls/PointerLockControls.js';
 
-/* --- basic setup --- */
+/* --- setup --- */
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x88ccee);
@@ -46,8 +35,12 @@ const ground = new THREE.Mesh(groundGeo, new THREE.MeshPhongMaterial({color:0x22
 scene.add(ground);
 
 /* --- controls --- */
-const controls = new PointerLockControls(camera, document.body);
+const controls = new PointerLockControls(camera, renderer.domElement);
 scene.add(controls.getObject());
+
+document.addEventListener('click', () => {
+  renderer.domElement.requestPointerLock();
+});
 
 let move = {f:0,b:0,l:0,r:0}, canJump=false;
 document.addEventListener('keydown', e=>{
@@ -68,7 +61,7 @@ document.addEventListener('keyup', e=>{
 let velocity = new THREE.Vector3();
 let prevTime = performance.now();
 
-/* --- a few trees --- */
+/* --- trees --- */
 const treeGeo = new THREE.CylinderGeometry(5,5,40,8);
 const treeMat = new THREE.MeshPhongMaterial({color:0x663300});
 for(let i=0;i<50;i++){
@@ -80,7 +73,7 @@ for(let i=0;i<50;i++){
   trunk.add(leaves);
 }
 
-/* --- animate loop --- */
+/* --- animate --- */
 function animate(){
   requestAnimationFrame(animate);
   const time = performance.now();
@@ -108,13 +101,7 @@ function animate(){
   renderer.render(scene,camera);
   prevTime=time;
 }
-
-/* --- start button fix --- */
-document.getElementById('startBtn').addEventListener('click',()=>{
-  document.getElementById('overlay').style.display='none';
-  renderer.domElement.requestPointerLock();
-  animate();
-});
+animate();
 
 </script>
 </body>
