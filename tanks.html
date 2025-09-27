@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Tanks! — Web Version</title>
+<style>
+  :root { --bg:#0b0c0f; --hud:#e6eef8; --accent:#5edc9a; }
+  html,body { height:100%; margin:0; background:var(--bg); color:var(--hud); font-family:Inter,system-ui,Segoe UI,Arial; }
+  .wrap { display:flex; flex-direction:column; align-items:center; padding:12px; box-sizing:border-box; height:100%; }
+  canvas { background:#111; border-radius:8px; display:block; max-width:100%; height:auto; touch-action:none; }
+  .topbar { width:100%; max-width:900px; display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .btn { background:var(--accent); color:#032; border:none; padding:8px 10px; border-radius:6px; cursor:pointer; font-weight:600; }
+  .hud { font-size:14px; }
+  /* Mobile control panel */
+  .mobile-controls { display:none; width:100%; max-width:900px; margin-top:10px; justify-content:space-between; }
+  .stick { width:130px; height:130px; border-radius:50%; background:rgba(255,255,255,0.04); position:relative; touch-action:none; }
+  .stick .knob { width:44px; height:44px; background:rgba(255,255,255,0.14); border-radius:50%; position:absolute; left:43px; top:43px; }
+  .action-buttons { display:flex; gap:12px; align-items:center; }
+  .action { width:64px; height:64px; border-radius:10px; background:rgba(255,255,255,0.06); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; }
+  @media(max-width:700px) {
+    .mobile-controls { display:flex; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="hud" id="hud">Score: 0 &nbsp;|&nbsp; Lives: 3 &nbsp;|&nbsp; Level: 1 &nbsp;|&nbsp; Tanks: 0</div>
+    <div>
+      <button class="btn" id="restartBtn">Restart</button>
+      <button class="btn" id="menuBtn" onclick="location.href='index.html'">Back</button>
+    </div>
+  </div>
+
+  <canvas id="game" width="900" height="600"></canvas>
+
+  <!-- mobile controls (appear on narrow screens) -->
+  <div class="mobile-controls" id="mobileControls">
+    <div class="stick" id="moveStick"><div class="knob" id="moveKnob"></div></div>
+    <div class="action-buttons">
+      <div class="action btn" id="shootBtn">SHOOT</div>
+      <div class="action btn" id="mineBtn">MINE</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+Tanks! — web implementation
+Features:
+- Player tank: rotate + thrust movement (top-down)
+- Shoot shells that ricochet off walls (limited active shells)
+- Place mines that explode on collision (or when an enemy drives over)
+- AI tanks: simple behavior (move, wander, aim/shoot at player)
+- Powerups: occasional spawns
+- Keyboard + mobile touch controls (virtual stick + action buttons)
+- Simple WebAudio sounds
+- Comments show where to tweak behavior
+*/
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const hudEl = document.getElementById('hud');
+const restartBtn = document.getElementById('restartBtn');
+
+// Responsive canvas (maintain ratio)
+function fitCanvas() {
+  const maxW = Math.min(window.innerWidth - 24, 1200);
+  canvas.style.width = maxW + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+/* -------------------------
+   Game parameters (tweak here)
+   ------------------------- */
+const SETTINGS = {
+  playerSpeed: 0.22,        // acceleration per frame
+  playerMaxSpeed: 3.6,
+  playerFriction: 0.98,
+  playerTurnSpeed: 0.08,   // radians per frame when turning
+  bulletSpeed: 6.5,
+  bulletBounces: 6,        // how many ricochets before disappearing
+  maxPlayerBullets: 5,
+  mineCountLimit: 3,
+  mineFuse: 12000,         // ms (unused, mines last indefinitely here)
+  aiCountBase: 3,
+  aiShootInterval: 1100,
+  aiSpeed: 1.6,
+  powerupRate: 0.01,       // chance per tick to spawn (small)
+  levelUpAfter: 10,        // enemy kills to level up
+  tickRate: 1000/60        // target tick rate for game logic
+};
+
+/* -------------------------
+   Utility helpers
+   ------------------------- */
+function rand(min, max){ return Math.random()*(max-min)+min; }
+function randInt(min, max){ return Math.floor(rand(min, max+1)); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function distance(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+function angleTo(a,b){ return Math.atan2(b.y-a.y, b.x-a.x); }
+
+/* -------------------------
+   WebAudio: a tiny helper
+   ------------------------- */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function beep(freq, dur=0.08, type='sine', vol=0.08){
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.value = vol;
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+
+/* -------------------------
+   Game state
+   ------------------------- */
+let player, bullets, mines, enemies, powerups, input, score, lives, level, kills;
+let lastTick = performance.now();
+
+/* Respawn / init */
+function resetGame(){
+  // Player object (circular tank)
+  player = {
+    x: canvas.width/2, y: canvas.height/2,
+    angle: -Math.PI/2, vx:0, vy:0,
+    radius: 16, reload:0, minesPlaced:0
+  };
+  bullets = []; // {x,y,vx,vy,owner,isPlayer,bouncesLeft}
+  mines = [];   // {x,y,owner}
+  enemies = []; // AI tanks
+  powerups = []; // {x,y,type,expires}
+  score = 0; lives = 3; level = 1; kills = 0;
+  spawnEnemies(SETTINGS.aiCountBase);
+  updateHUD();
+}
+resetGame();
+
+/* -------------------------
+   Spawning
+   ------------------------- */
+function spawnEnemies(n){
+  for(let i=0;i<n;i++){
+    // Place them away from player
+    let x,y,tries=0;
+    do{
+      x = randInt(40, canvas.width-40);
+      y = randInt(40, canvas.height-40);
+      tries++;
+    } while(distance({x,y}, player) < 140 && tries<60);
+    enemies.push({
+      x,y, angle: rand(-Math.PI, Math.PI), vx:0, vy:0,
+      radius:14,
+      lastShot: performance.now() + rand(0, SETTINGS.aiShootInterval),
+      wanderTarget: null,
+      alive: true
+    });
+  }
+}
+
+/* -------------------------
+   Input handling
+   ------------------------- */
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  // resume audio on interaction
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+});
+document.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+// Mouse/touch aim & shoot: left click shoots, right click drops mine
+canvas.addEventListener('contextmenu', e=>e.preventDefault());
+canvas.addEventListener('mousedown', (e) => {
+  if(e.button===0) tryShoot();
+  if(e.button===2) placeMine();
+});
+canvas.addEventListener('touchstart', (e)=> {
+  // handled by mobile controls below
+}, {passive:false});
+
+/* -------------------------
+   Player actions
+   ------------------------- */
+function tryShoot(){
+  // limit number of player bullets
+  const playerBullets = bullets.filter(b=>b.owner==='player').length;
+  if(playerBullets >= SETTINGS.maxPlayerBullets) return;
+  // shoot from tank nose
+  const noseX = player.x + Math.cos(player.angle)*(player.radius+8);
+  const noseY = player.y + Math.sin(player.angle)*(player.radius+8);
+  const vx = Math.cos(player.angle)*SETTINGS.bulletSpeed;
+  const vy = Math.sin(player.angle)*SETTINGS.bulletSpeed;
+  bullets.push({x:noseX,y:noseY,vx,vy,owner:'player',bounces:SETTINGS.bulletBounces, born:performance.now()});
+  beep(880,0.07,'square',0.06);
+}
+
+function placeMine(){
+  // limited mines
+  const ownedMines = mines.filter(m=>m.owner==='player').length;
+  if(ownedMines >= SETTINGS.mineCountLimit) return;
+  mines.push({x:player.x,y:player.y,owner:'player',radius:10,created:performance.now()});
+  beep(220,0.14,'sawtooth',0.08);
+}
+
+/* -------------------------
+   Bullet / collision helpers
+   ------------------------- */
+function reflect(vx, vy, nx, ny){
+  // reflect vector v across normal n (n must be normalized)
+  const dot = vx*nx + vy*ny;
+  return {vx: vx - 2*dot*nx, vy: vy - 2*dot*ny};
+}
+
+/* -------------------------
+   Explosion handling
+   ------------------------- */
+function explode(x,y,source){
+  // damage nearby tanks
+  const blast = 48;
+  // visual effect handled in draw
+  beep(120,0.25,'triangle',0.18);
+  // damage enemies
+  for(const en of enemies){
+    if(!en.alive) continue;
+    if(distance({x,y}, en) < blast){
+      en.alive = false;
+      score += 100;
+      kills++;
+    }
+  }
+  // if player in blast
+  if(distance({x,y}, player) < blast){
+    // player hit
+    lives--;
+    // knockback
+    const ang = Math.atan2(player.y - y, player.x - x);
+    player.vx += Math.cos(ang)*2.2;
+    player.vy += Math.sin(ang)*2.2;
+  }
+  updateHUD();
+}
+
+/* -------------------------
+   AI behavior
+   ------------------------- */
+function aiThink(en){
+  if(!en.alive) return;
+  const now = performance.now();
+  // If player is close, aim and shoot more often
+  const angToPlayer = angleTo(en, player);
+  const dist = distance(en, player);
+
+  // Rotate toward player
+  let d = normalizeAngle(angToPlayer - en.angle);
+  en.angle += clamp(d, -0.04, 0.04);
+
+  // Movement: if too close, back up; else approach/wander
+  if(dist > 220){
+    // accelerate toward facing
+    en.vx += Math.cos(en.angle)*0.06;
+    en.vy += Math.sin(en.angle)*0.06;
+  } else if(dist < 120){
+    // back off
+    en.vx -= Math.cos(en.angle)*0.06;
+    en.vy -= Math.sin(en.angle)*0.06;
+  } else {
+    // small wander
+    if(!en.wanderTarget || distance(en, en.wanderTarget) < 10) {
+      en.wanderTarget = {x: randInt(40, canvas.width-40), y: randInt(40, canvas.height-40)};
+    }
+    const a = angleTo(en, en.wanderTarget);
+    const diff = normalizeAngle(a - en.angle);
+    en.angle += clamp(diff, -0.02, 0.02);
+    en.vx += Math.cos(en.angle)*0.03; en.vy += Math.sin(en.angle)*0.03;
+  }
+
+  // fire occasionally when roughly aimed
+  if(now - en.lastShot > SETTINGS.aiShootInterval - Math.min(600, (220-dist)) ){
+    // require roughly facing player to shoot
+    if(Math.abs(normalizeAngle(angToPlayer - en.angle)) < 0.45){
+      // fire bullet
+      const bx = en.x + Math.cos(en.angle)*(en.radius+8);
+      const by = en.y + Math.sin(en.angle)*(en.radius+8);
+      bullets.push({x:bx,y:by,vx:Math.cos(en.angle)*SETTINGS.bulletSpeed, vy:Math.sin(en.angle)*SETTINGS.bulletSpeed, owner:'enemy', bounces:SETTINGS.bulletBounces});
+      en.lastShot = now + rand(120,320);
+    } else {
+      en.lastShot = now + 200; // check soon
+    }
+  }
+}
+
+/* -------------------------
+   Normalizing angle to [-PI,PI]
+   ------------------------- */
+function normalizeAngle(a){
+  while(a > Math.PI) a -= Math.PI*2;
+  while(a < -Math.PI) a += Math.PI*2;
+  return a;
+}
+
+/* -------------------------
+   Game update (logic)
+   ------------------------- */
+function update(delta){
+  // PLAYER INPUT: rotation and thrust
+  // Keyboard: left/right rotate, up thrust, down reverse
+  const left = keys['arrowleft'] || keys['a'];
+  const right = keys['arrowright'] || keys['d'];
+  const forward = keys['arrowup'] || keys['w'];
+  const backward = keys['arrowdown'] || keys['s'];
+
+  if(left) player.angle -= SETTINGS.playerTurnSpeed;
+  if(right) player.angle += SETTINGS.playerTurnSpeed;
+  if(forward){
+    player.vx += Math.cos(player.angle) * SETTINGS.playerSpeed;
+    player.vy += Math.sin(player.angle) * SETTINGS.playerSpeed;
+  }
+  if(backward){
+    player.vx -= Math.cos(player.angle) * (SETTINGS.playerSpeed*0.5);
+    player.vy -= Math.sin(player.angle) * (SETTINGS.playerSpeed*0.5);
+  }
+  // friction & speed clamp
+  player.vx *= SETTINGS.playerFriction;
+  player.vy *= SETTINGS.playerFriction;
+  const spd = Math.hypot(player.vx, player.vy);
+  if(spd > SETTINGS.playerMaxSpeed){
+    player.vx = player.vx / spd * SETTINGS.playerMaxSpeed;
+    player.vy = player.vy / spd * SETTINGS.playerMaxSpeed;
+  }
+
+  // shooting keys (space) and mines (m)
+  if(keys[' ']){ // space
+    if(!input.spaceHold){
+      tryShoot(); input.spaceHold = true;
+    }
+  } else input.spaceHold = false;
+  if(keys['m']){ if(!input.mHold){ placeMine(); input.mHold=true; } } else input.mHold=false;
+
+  // update player position
+  player.x += player.vx;
+  player.y += player.vy;
+
+  // clamp inside arena
+  player.x = clamp(player.x, 12, canvas.width-12);
+  player.y = clamp(player.y, 12, canvas.height-12);
+
+  // update enemies
+  for(const en of enemies) if(en.alive){
+    aiThink(en);
+    en.vx *= 0.96; en.vy *= 0.96;
+    const sp = Math.hypot(en.vx, en.vy);
+    if(sp > SETTINGS.aiSpeed){ en.vx = en.vx/sp*SETTINGS.aiSpeed; en.vy = en.vy/sp*SETTINGS.aiSpeed; }
+    en.x += en.vx; en.y += en.vy;
+    // keep inside
+    en.x = clamp(en.x, en.radius+6, canvas.width-en.radius-6);
+    en.y = clamp(en.y, en.radius+6, canvas.height-en.radius-6);
+  }
+
+  // Update bullets: movement, wall collisions (ricochet), and tank hits
+  for(let i = bullets.length-1; i >= 0; i--){
+    const b = bullets[i];
+    b.x += (b.vx||b.v); b.y += (b.vy||0);
+
+    // Walls: reflect if bounce left
+    let bounced = false;
+    if(b.x < 4){ // left wall
+      const {vx,vy} = reflect(b.vx, b.vy, 1, 0); b.vx=vx; b.vy=vy; b.x = 4; bounced = true;
+    } else if(b.x > canvas.width-4){
+      const {vx,vy} = reflect(b.vx, b.vy, -1, 0); b.vx=vx; b.vy=vy; b.x = canvas.width-4; bounced=true;
+    }
+    if(b.y < 4){
+      const {vx,vy} = reflect(b.vx, b.vy, 0, 1); b.vx=vx; b.vy=vy; b.y = 4; bounced=true;
+    } else if(b.y > canvas.height-4){
+      const {vx,vy} = reflect(b.vx, b.vy, 0, -1); b.vx=vx; b.vy=vy; b.y = canvas.height-4; bounced=true;
+    }
+    if(bounced) {
+      b.bounces = (b.bounces||SETTINGS.bulletBounces) - 1;
+      beep(600,0.04,'triangle',0.03);
+      if(b.bounces <= 0){ bullets.splice(i,1); continue; }
+    }
+
+    // bullet collision with tanks
+    if(b.owner === 'player'){
+      // hits enemies
+      for(const en of enemies){
+        if(!en.alive) continue;
+        if(distance(b, en) < en.radius+6){
+          // explode
+          explode(b.x, b.y, 'player');
+          bullets.splice(i,1);
+          en.alive = false;
+          score += 100;
+          kills++;
+          break;
+        }
+      }
+    } else if(b.owner === 'enemy'){
+      // hits player
+      if(distance(b, player) < player.radius+6){
+        // player hit
+        explode(b.x,b.y,'enemy');
+        bullets.splice(i,1);
+        // early continue
+        continue;
+      }
+      // enemy bullets can hit other enemies (friendly fire)
+      for(const en of enemies){
+        if(!en.alive) continue;
+        if(distance(b, en) < en.radius+6){
+          explode(b.x, b.y, 'enemy');
+          bullets.splice(i,1);
+          en.alive = false;
+          break;
+        }
+      }
+    }
+  }
+
+  // Mines: if any tank (player or enemy) hits mine, explode
+  for(let i=mines.length-1;i>=0;i--){
+    const m = mines[i];
+    // player triggers enemy mines and vice versa (simple)
+    if(distance(m, player) < player.radius + m.radius + 4){
+      explode(m.x, m.y, m.owner);
+      mines.splice(i,1);
+      continue;
+    }
+    for(const en of enemies){
+      if(!en.alive) continue;
+      if(distance(m, en) < m.radius + en.radius + 4){
+        explode(m.x, m.y, m.owner);
+        mines.splice(i,1);
+        break;
+      }
+    }
+  }
+
+  // Remove dead enemies
+  let aliveCount = enemies.filter(e=>e.alive).length;
+
+  // Level progression: spawn more enemies if they've been cleared
+  if(aliveCount === 0){
+    level++;
+    const spawnCount = SETTINGS.aiCountBase + Math.min(6, level);
+    spawnEnemies(spawnCount + Math.floor(level/2));
+    // small reward
+    score += 150;
+    updateHUD();
+  }
+
+  // Randomly spawn powerups sporadically:
+  if(Math.random() < SETTINGS.powerupRate){
+    powerups.push({x:randInt(40, canvas.width-40), y:randInt(40, canvas.height-40), type: 'ammo', ttl: performance.now() + 15000});
+  }
+
+  // Check player death (lives)
+  if(lives <= 0){
+    // game over
+    alert('Game Over! Score: ' + score);
+    resetGame();
+  }
+
+  // update HUD
+  updateHUD();
+
+  // Cleanup: remove old powerups
+  const now = performance.now();
+  powerups = powerups.filter(p => p.ttl > now);
+}
+
+/* -------------------------
+   HUD update
+   ------------------------- */
+function updateHUD(){
+  const aliveCount = enemies.filter(e=>e.alive).length;
+  hudEl.textContent = `Score: ${score} | Lives: ${lives} | Level: ${level} | Tanks: ${aliveCount}`;
+}
+
+/* -------------------------
+   Rendering
+   ------------------------- */
+let effects = []; // for explosion visuals
+function draw(){
+  // background grid
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#0c0e13';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // arena border
+  ctx.strokeStyle = '#1f2937';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(2,2,canvas.width-4,canvas.height-4);
+
+  // draw mines
+  for(const m of mines){
+    ctx.fillStyle = '#cc5a5a';
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, m.radius, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#7b1f1f';
+    ctx.fillRect(m.x-6, m.y-2, 12,4);
+  }
+
+  // draw bullets
+  for(const b of bullets){
+    ctx.fillStyle = (b.owner==='player') ? '#9be56b' : '#ff9a9a';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // draw powerups
+  for(const p of powerups){
+    ctx.fillStyle = '#66d9ff';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#032';
+    ctx.font = '10px sans-serif'; ctx.textAlign='center'; ctx.fillText('A', p.x, p.y+3);
+  }
+
+  // draw enemies
+  for(const en of enemies){
+    if(!en.alive) continue;
+    drawTank(en.x, en.y, en.angle, en.radius, '#f47b7b');
+  }
+
+  // draw player on top
+  drawTank(player.x, player.y, player.angle, player.radius, '#7be59d', true);
+
+  // draw explosion effects
+  for(const e of effects){
+    ctx.beginPath();
+    ctx.fillStyle = `rgba(255,160,60,${e.life/1.0})`;
+    ctx.arc(e.x, e.y, (1-e.life)*40, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+/* drawTank: simple body + turret */
+function drawTank(x,y,angle,r,color, drawEyes=false){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.rotate(angle);
+  // body
+  ctx.fillStyle = color;
+  roundRect(ctx, -r, -r, r*2, r*2, r*0.3, true, false);
+  // turret (cannon)
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0, -4, r+8, 8);
+  // tracks
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-r, -r+2, r*0.3, r*2-4);
+  ctx.fillRect(r - r*0.3, -r+2, r*0.3, r*2-4);
+  // eyes (if player)
+  if(drawEyes){
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-r/2, -r/2, 3, 0, Math.PI*2); ctx.arc(-r/2, r/2, 3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* helper: rounded rect */
+function roundRect(ctx,x,y,w,h,r,fill,stroke){
+  if(typeof r === 'undefined') r=5;
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+  if(fill) ctx.fill();
+  if(stroke) ctx.stroke();
+}
+
+/* -------------------------
+   Main loop (timed)
+   ------------------------- */
+let accumulator = 0;
+function mainLoop(now){
+  const delta = now - lastTick;
+  lastTick = now;
+  accumulator += delta;
+
+  // update at fixed step(s)
+  while(accumulator >= SETTINGS.tickRate){
+    update(SETTINGS.tickRate);
+    // update effects life
+    for(let i=effects.length-1;i>=0;i--){
+      effects[i].life -= 0.03;
+      if(effects[i].life <= 0) effects.splice(i,1);
+    }
+    accumulator -= SETTINGS.tickRate;
+  }
+  draw();
+  requestAnimationFrame(mainLoop);
+}
+requestAnimationFrame(mainLoop);
+
+/* -------------------------
+   Utility: spawn explosion visual
+   ------------------------- */
+function spawnExplosion(x,y){
+  effects.push({x,y,life:1.0});
+}
+
+/* -------------------------
+   Hook explode to visuals & scoring exactly
+   (we separated earlier but will call this here)
+   ------------------------- */
+const origExplode = explode;
+explode = function(x,y,source){
+  spawnExplosion(x,y);
+  origExplode(x,y,source);
+}
+
+/* -------------------------
+   Restart button
+   ------------------------- */
+restartBtn.addEventListener('click', ()=>resetGame());
+
+/* -------------------------
+   Mobile virtual stick & buttons
+   ------------------------- */
+const mobileControls = document.getElementById('mobileControls');
+const moveStick = document.getElementById('moveStick');
+const moveKnob = document.getElementById('moveKnob');
+const shootBtn = document.getElementById('shootBtn');
+const mineBtn = document.getElementById('mineBtn');
+// show/hide based on small width
+function handleMobileVisibility(){
+  if(window.innerWidth <= 700) mobileControls.style.display = 'flex';
+  else mobileControls.style.display = 'none';
+}
+handleMobileVisibility();
+window.addEventListener('resize', handleMobileVisibility);
+
+// stick math
+let stickActive = false;
+let stickCenter = null;
+moveStick.addEventListener('pointerdown', (e)=>{
+  moveStick.setPointerCapture(e.pointerId);
+  stickActive = true;
+  const rect = moveStick.getBoundingClientRect();
+  stickCenter = { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+});
+moveStick.addEventListener('pointermove', (e)=>{
+  if(!stickActive) return;
+  const x = e.clientX - stickCenter.x;
+  const y = e.clientY - stickCenter.y;
+  // limit knob radius
+  const max = 40;
+  const len = Math.hypot(x,y);
+  const nx = (len>max) ? x/len*max : x;
+  const ny = (len>max) ? y/len*max : y;
+  moveKnob.style.transform = `translate(${nx}px, ${ny}px)`;
+  // map to player movement: angle & thrust
+  if(len>12){
+    player.angle = Math.atan2(ny, nx);
+    player.vx += Math.cos(player.angle) * 0.12;
+    player.vy += Math.sin(player.angle) * 0.12;
+  }
+});
+moveStick.addEventListener('pointerup', (e)=>{
+  moveStick.releasePointerCapture(e.pointerId);
+  stickActive = false;
+  moveKnob.style.transform = `translate(0px,0px)`;
+});
+shootBtn.addEventListener('pointerdown', tryShoot);
+mineBtn.addEventListener('pointerdown', placeMine);
+
+/* -------------------------
+   Safe checks / tracking variables
+   ------------------------- */
+input = { spaceHold:false, mHold:false };
+
+/* -------------------------
+   Minor fixes: ensure bullets have vx/vy
+   ------------------------- */
+function ensureBullets(){
+  for(const b of bullets){
+    if(typeof b.vx === 'undefined' && typeof b.v === 'number'){ b.vx = b.v; b.vy = 0; }
+  }
+}
+// schedule small intervals
+setInterval(ensureBullets, 500);
+
+/* -------------------------
+   Initial HUD
+   ------------------------- */
+updateHUD();
+
+</script>
+</body>
+</html>
