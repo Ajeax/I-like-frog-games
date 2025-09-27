@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Snake</title>
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+    canvas {
+      background: #111;
+      display: block;
+      margin: auto;
+      max-width: 100%;
+      height: auto;
+    }
+    #backBtn {
+      margin-top: 10px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background: #4CAF50;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #backBtn:hover {
+      background: #45a049;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="snake" width="400" height="400"></canvas>
+  <button id="backBtn" onclick="location.href='index.html'">Back to Menu</button>
+
+  <script>
+    const canvas = document.getElementById("snake");
+    const ctx = canvas.getContext("2d");
+
+    const box = 20; // size of each grid square
+    let snake = [{ x: 9 * box, y: 10 * box }];
+    let direction = null;
+    let food = randomFood();
+    let score = 0;
+    let gameOver = false;
+
+    // 🎵 Simple sound using Web Audio
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playSound(freq, duration=0.1, type="square") {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    function randomFood() {
+      return {
+        x: Math.floor(Math.random() * (canvas.width / box)) * box,
+        y: Math.floor(Math.random() * (canvas.height / box)) * box
+      };
+    }
+
+    // Draw
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw snake
+      for (let i = 0; i < snake.length; i++) {
+        ctx.fillStyle = i === 0 ? "lime" : "white";
+        ctx.fillRect(snake[i].x, snake[i].y, box, box);
+      }
+
+      // Draw food
+      ctx.fillStyle = "red";
+      ctx.fillRect(food.x, food.y, box, box);
+
+      // Draw score
+      ctx.fillStyle = "white";
+      ctx.font = "20px Arial";
+      ctx.fillText("Score: " + score, box, 20);
+    }
+
+    // Update
+    function update() {
+      if (!direction || gameOver) return;
+
+      let headX = snake[0].x;
+      let headY = snake[0].y;
+
+      if (direction === "LEFT") headX -= box;
+      if (direction === "UP") headY -= box;
+      if (direction === "RIGHT") headX += box;
+      if (direction === "DOWN") headY += box;
+
+      // Check collision with walls
+      if (
+        headX < 0 ||
+        headY < 0 ||
+        headX >= canvas.width ||
+        headY >= canvas.height ||
+        snake.some(seg => seg.x === headX && seg.y === headY)
+      ) {
+        gameOver = true;
+        playSound(100, 0.4, "sawtooth");
+        alert("Game Over! Your score: " + score);
+        document.location.reload();
+        return;
+      }
+
+      let newHead = { x: headX, y: headY };
+
+      // Eat food
+      if (headX === food.x && headY === food.y) {
+        score++;
+        playSound(500, 0.1, "sine");
+        food = randomFood();
+      } else {
+        snake.pop(); // remove tail
+      }
+
+      snake.unshift(newHead); // add new head
+    }
+
+    // Main game loop
+    function gameLoop() {
+      update();
+      draw();
+    }
+    setInterval(gameLoop, 120);
+
+    // Keyboard controls
+    document.addEventListener("keydown", (e) => {
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      if (e.key === "ArrowLeft" || e.key === "a") {
+        if (direction !== "RIGHT") direction = "LEFT";
+      }
+      if (e.key === "ArrowUp" || e.key === "w") {
+        if (direction !== "DOWN") direction = "UP";
+      }
+      if (e.key === "ArrowRight" || e.key === "d") {
+        if (direction !== "LEFT") direction = "RIGHT";
+      }
+      if (e.key === "ArrowDown" || e.key === "s") {
+        if (direction !== "UP") direction = "DOWN";
+      }
+    });
+
+    // Mobile swipe controls
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    canvas.addEventListener("touchstart", (e) => {
+      const touch = e.touches[0];
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+    });
+
+    canvas.addEventListener("touchend", (e) => {
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - touchStartX;
+      const dy = touch.clientY - touchStartY;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (dx > 0 && direction !== "LEFT") direction = "RIGHT";
+        else if (dx < 0 && direction !== "RIGHT") direction = "LEFT";
+      } else {
+        if (dy > 0 && direction !== "UP") direction = "DOWN";
+        else if (dy < 0 && direction !== "DOWN") direction = "UP";
+      }
+    });
+  </script>
+</body>
+</html>
